@@ -1,18 +1,4 @@
-use crate::subprotocols::grand_product::{BatchedGrandProduct, ToggledBatchedGrandProduct};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use itertools::{interleave, Itertools};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use rayon::prelude::*;
-use std::marker::PhantomData;
-use tracing::trace_span;
-
-use crate::field::JoltField;
-use crate::jolt::instruction::{JoltInstructionSet, SubtableIndices};
-use crate::jolt::subtable::JoltSubtableSet;
-use crate::lasso::memory_checking::MultisetHashes;
-use crate::poly::commitment::commitment_scheme::{BatchType, CommitShape, CommitmentScheme};
-use crate::utils::mul_0_1_optimized;
-use crate::{
+        // TODO(sragss): We could use rayon::unzip here but it is not yet stable.
     lasso::memory_checking::{MemoryCheckingProof, MemoryCheckingProver, MemoryCheckingVerifier},
     poly::{
         dense_mlpoly::DensePolynomial,
@@ -928,10 +914,17 @@ where
 
         let subtable_lookup_indices: Vec<Vec<usize>> = Self::subtable_lookup_indices(ops);
 
-        let polys: Vec<(DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>)> = (0
-            ..preprocessing.num_memories)
+        let (read_cts, final_cts, E_polys): (
+            Vec<DensePolynomial<F>>,
+            Vec<DensePolynomial<F>>,
+            Vec<DensePolynomial<F>>,
+        ) = (0..preprocessing.num_memories)
             .into_par_iter()
-            .map(|memory_index| {
+            .map(|memory_index| -> (
+                DensePolynomial<F>,
+                DensePolynomial<F>,
+                DensePolynomial<F>,
+            ) {
                 let dim_index = preprocessing.memory_to_dimension_index[memory_index];
                 let subtable_index = preprocessing.memory_to_subtable_index[memory_index];
                 let access_sequence: &Vec<usize> = &subtable_lookup_indices[dim_index];
