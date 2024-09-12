@@ -928,10 +928,9 @@ where
 
         let subtable_lookup_indices: Vec<Vec<usize>> = Self::subtable_lookup_indices(ops);
 
-        let polys: Vec<(DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>)> = (0
-            ..preprocessing.num_memories)
-            .into_par_iter()
-            .map(|memory_index| {
+        let (first_half_polys, second_half_polys) = rayon::join(
+            || {
+                (0..preprocessing.num_memories / 2).map(|memory_index| {
                 let dim_index = preprocessing.memory_to_dimension_index[memory_index];
                 let subtable_index = preprocessing.memory_to_subtable_index[memory_index];
                 let access_sequence: &Vec<usize> = &subtable_lookup_indices[dim_index];
@@ -962,29 +961,47 @@ where
                     DensePolynomial::from_usize(&final_cts_i),
                     DensePolynomial::new(subtable_lookups),
                 )
-            })
-            .collect();
-
-        // Vec<(DensePolynomial<F>, DensePolynomial<F>, DensePolynomial<F>)> -> (Vec<DensePolynomial<F>>, Vec<DensePolynomial<F>>, Vec<DensePolynomial<F>>)
-        let (read_cts, final_cts, E_polys): (
-            Vec<DensePolynomial<F>>,
-            Vec<DensePolynomial<F>>,
-            Vec<DensePolynomial<F>>,
-        ) = polys.into_iter().fold(
-            (Vec::new(), Vec::new(), Vec::new()),
-            |(mut read_acc, mut final_acc, mut E_acc), (read, f, E)| {
-                read_acc.push(read);
-                final_acc.push(f);
-                E_acc.push(E);
-                (read_acc, final_acc, E_acc)
+                }).collect::<Vec<_>>()
             },
-        );
+            || {
+                (preprocessing.num_memories / 2..preprocessing.num_memories)
+                    .map(|memory_index| {
+                        let dim_index =
+                            preprocessing.memory_to_dimension_index[memory_index];
+                        let subtable_index =
+                            preprocessing.memory_to_subtable_index[memory_index];
+                        let access_sequence: &Vec<usize> =
+                            &subtable_lookup_indices[dim_index];
 
-        let dim: Vec<DensePolynomial<F>> = (0..C)
-            .into_par_iter()
-            .map(|i| {
-                let access_sequence: &Vec<usize> = &subtable_lookup_indices[i];
-                DensePolynomial::from_usize(access_sequence)
+                        let mut final_cts_i = vec![0usize; M];
+                        let mut read_cts_i = vec![0usize; m];
+                        let mut subtable_lookups = vec![F::zero(); m];
+
+                        for (j, op) in ops.iter().enumerate() {
+                            if let Some(instr) = &op.instruction_lookup {
+                                let memories_used =
+                                    &preprocessing.instruction_to_memory_indices
+                                        [InstructionSet::enum_index(instr)];
+                                if memories_used.contains(&memory_index) {
+                                    let memory_address = access_sequence[j];
+                                    debug_assert!(memory_address < M);
+
+                                    let counter = final_cts_i[memory_address];
+                                    read_cts_i[j] = counter;
+                                    final_cts_i[memory_address] = counter + 1;
+                                    subtable_lookups[j] =
+                                        preprocessing.materialized_subtables
+                                            [subtable_index][memory_address];
+                                }
+                            }
+                        }
+
+                        (
+                            DensePolynomial::from_usize(&read_cts_i),
+                            DensePolynomial::new(subtable_lookups),
+                        )
+                    })
+            .collect();
             })
             .collect();
 
@@ -1004,34 +1021,30 @@ where
         let mut lookup_outputs = Self::compute_lookup_outputs(ops);
         lookup_outputs.resize(m, F::zero());
         let lookup_outputs = DensePolynomial::new(lookup_outputs);
-
-        InstructionPolynomials {
-            _marker: PhantomData,
-            dim,
-            read_cts,
-            final_cts,
-            instruction_flag_polys,
-            instruction_flag_bitvectors,
-            E_polys,
-            lookup_outputs,
-        }
-    }
-
-    /// Prove Jolt primary sumcheck including instruction collation.
-    ///
-    /// Computes \sum{ eq(r,x) * [ flags_0(x) * g_0(E(x)) + flags_1(x) * g_1(E(x)) + ... + flags_{NUM_INSTRUCTIONS}(E(x)) * g_{NUM_INSTRUCTIONS}(E(x)) ]}
-    /// via the sumcheck protocol.
-    /// Note: These E(x) terms differ from term to term depending on the memories used in the instruction.
-    ///
-    /// Returns: (SumcheckProof, Random evaluation point, claimed evaluations of polynomials)
-    ///
-    /// Params:
-    /// - `claim`: Claimed sumcheck evaluation.
-    /// - `num_rounds`: Number of rounds to run sumcheck. Corresponds to the number of free bits or free variables in the polynomials.
-    /// - `memory_polys`: Each of the `E` polynomials or "dereferenced memory" polynomials.
-    /// - `flag_polys`: Each of the flag selector polynomials describing which instruction is used at a given step of the CPU.
-    /// - `degree`: Degree of the inner sumcheck polynomial. Corresponds to number of evaluation points per round.
     /// - `transcript`: Fiat-shamir transcript.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all, name = "InstructionLookups::prove_primary_sumcheck")]
     fn prove_primary_sumcheck(
