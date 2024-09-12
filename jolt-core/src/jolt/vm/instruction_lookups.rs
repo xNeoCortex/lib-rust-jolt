@@ -970,13 +970,13 @@ where
             Vec<DensePolynomial<F>>,
             Vec<DensePolynomial<F>>,
             Vec<DensePolynomial<F>>,
-        ) = polys.into_iter().fold(
-            (Vec::new(), Vec::new(), Vec::new()),
-            |(mut read_acc, mut final_acc, mut E_acc), (read, f, E)| {
-                read_acc.push(read);
-                final_acc.push(f);
-                E_acc.push(E);
-                (read_acc, final_acc, E_acc)
+        ) = rayon::join(
+            || polys.iter().map(|(read_cts_i, _, _)| read_cts_i.clone()).collect(),
+            || {
+                rayon::join(
+                    || polys.iter().map(|(_, final_cts_i, _)| final_cts_i.clone()).collect(),
+                    || polys.iter().map(|(_, _, E_polys_i)| E_polys_i.clone()).collect(),
+                )
             },
         );
 
@@ -1365,12 +1365,13 @@ where
             })
             .collect();
 
-        let mut subtable_lookup_indices: Vec<Vec<usize>> = Vec::with_capacity(C);
-        for i in 0..C {
-            let mut access_sequence: Vec<usize> =
-                chunked_indices.iter().map(|chunks| chunks[i]).collect();
-            access_sequence.resize(m, 0);
-            subtable_lookup_indices.push(access_sequence);
+        let mut subtable_lookup_indices: Vec<Vec<usize>> =
+            vec![vec![0usize; m]; C];
+
+        for (i, access_sequence) in subtable_lookup_indices.iter_mut().enumerate() {
+            for (j, chunk) in chunked_indices.iter().enumerate() {
+                access_sequence[j] = chunk[i];
+            }
         }
         subtable_lookup_indices
     }
